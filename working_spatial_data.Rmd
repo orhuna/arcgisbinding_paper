@@ -1,0 +1,128 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+This notebook is supplementary to "arcgisbinding: An R package for integrating R and ArcGIS Pro". Code below showcases utilizing Geoprocessing tools within R scripts using the arcgisbinding and reticulate.
+
+```{r importLibraries}
+library(arcgisbinding)
+library(leaflet, quietly = TRUE)
+library(leaflet.esri, quietly = TRUE)
+library(sf, quietly = TRUE)
+library(hpiR, quietly = TRUE)
+library(ggplot2, quietly = TRUE)
+library(raster, quietly = TRUE)
+library(reticulate, quietly = TRUE)
+print(paste0("This demo uses ", R.Version()$version.string))
+```
+
+```{r Bind to Python inside the Conda environment with r-arcgis-essentials}
+## Point Reticulate to the Python interpreter in the Conda environment, r_env
+use_python("C:/Users/janor/AppData/Local/ESRI/conda/envs/r_env/python.exe")
+## Import the Python Environment
+arcpy <- import("arcpy")
+print("arcpy imported")
+print(paste0("Using Python version ", py_version()))
+```
+
+```{r Initialize arcgisbinding}
+arc.check_product()
+```
+
+```{r Get House King County House Price Feature Service Meta Data}
+wd <- getwd()
+feature_service <- 'https://services3.arcgis.com/oZfKvdlWHN1MwS48/arcgis/rest/services/King_County_House_Prices/FeatureServer/0'
+arc.fs <- arc.open(feature_service)
+print(arc.fs)
+```
+
+```{r Read Get House King County House Price Feature Service as an Arc Data Frame}
+kc.house.arc <- arc.select(arc.fs)
+head(kc.house.arc, 2)
+```
+
+```{r Convert Arc Type Dataframe to an SF Data Frame}
+kc.house.sf <- arc.data2sf(kc.house.arc)
+head(kc.house.sf, 2)
+```
+
+```{r Define an Interactive Map of House Prices in King County, WA}
+pal <- colorQuantile("YlOrRd", kc.house.sf$price)
+
+map.1 <- leaflet(kc.house.sf) %>%
+  setView(-122.3321, 47.5063, 9.5) %>%
+  addEsriBasemapLayer(esriBasemapLayers$DarkGray, autoLabels = TRUE) %>%
+  addCircles(color = ~pal(kc.house.sf$price))
+map.1
+
+```
+
+```{r Check out the Spatial Analyst Extension to Compute Euclidean Distance Raster}
+if (arcpy$CheckExtension("Spatial") == 'Available')
+{
+  arcpy$CheckOutExtension("Spatial")
+}
+```
+
+```{r Set Output Extent}
+## Set the Extent of Geoprocessing Tool Outputs to that of KC House Data
+arcpy$env$extent <- feature_service
+## Set Parallal Processing Factor to 0
+arcpy$env$parallelProcessingFactor = "0%"
+```
+
+```{r}
+water.fc <- file.path(wd, "sample_R.gdb/puget_sound_waterbody")
+                      
+#out_distance_raster = arcpy$sa$EucDistance(water.fc, NULL, 0.00257875555387545, NULL, "PLANAR", NULL, NULL)
+
+out_raster <- arcpy$sa$DistanceAccumulation(water.fc, NULL, NULL, NULL, NULL, "BINARY 1 -30 30", NULL, "BINARY 1 45", NULL, NULL, NULL, NULL, NULL, NULL, '', "PLANAR")
+
+## Convert the Output Raster Location to UNIX Format (Forward Slashes)
+out_raster <- gsub("\\\\", "/", out_raster)
+```
+
+```{r Project Distance Raster to that of King County House Data}
+out.proj.raster <- file.path(wd, "sample_R.gdb/proj_raster")
+arcpy$management$ProjectRaster(out_raster , out.proj.raster, 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]', "NEAREST", "2.57875555387545E-03 2.57875555387545E-03", "NAD_1983_HARN_To_WGS_1984_2", NULL, 'PROJCS["NAD_1983_HARN_StatePlane_Washington_South_FIPS_4602",GEOGCS["GCS_North_American_1983_HARN",DATUM["D_North_American_1983_HARN",SPHEROID["GRS_1980",6378137.0,298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic"],PARAMETER["False_Easting",1640416.666666667],PARAMETER["False_Northing",0.0],PARAMETER["Central_Meridian",-120.5],PARAMETER["Standard_Parallel_1",45.83333333333334],PARAMETER["Standard_Parallel_2",47.33333333333334],PARAMETER["Latitude_Of_Origin",45.33333333333334],UNIT["Foot_US",0.3048006096012192]]', "NO_VERTICAL")
+```
+
+```{r Read Distance Raster}
+arc.dist2water <- arc.open(out.proj.raster)
+raster_arc <- arc.raster(arc.dist2water)
+## Convert Arc Raster to R Raster (raster* object)
+raster_R <- as.raster(raster_arc)
+plot(raster_R)
+```
+
+```{r Extract Distance to Water Values from Raster for Point Data}
+crs(raster_R) <- CRS(st_crs(kc.house.sf)$wkt)
+kc.w.dist <- extract(raster_R, method = 'bilinear', kc.house.sf, na.rm=TRUE)
+## Visualize Histogram of Distance to Nearest Water Body for Houses
+hist(kc.w.dist, main="Histogram of Distance to Nearest Water Body")
+
+## Append the field to the KC House Dataframe
+kc.house.sf["dist2Water"] <- kc.w.dist
+```
+
+```{r Calculate the Hedonic Index for King County}
+kc.house.sf['Date'] <- as.Date(kc.house.sf$date, format = "%Y%m%dT000000")
+
+hedonic.df <- hedCreateTrans(kc.house.sf, "id", "OBJECTID", "price", date= "Date")
+
+hed_model <- hedModel(estimator = structure('robust', class = 'base'),
+                      hed_df = hedonic.df, periodicity = 'monthly',
+                      hed_spec = as.formula(log(price) ~ bedrooms+ bathrooms + 
+                                              sqft_living + sqft_lot + dist2Water))
+
+hedonic.df['Predicted'] <- exp(hed_model$fitted.values)
+log.res <- log(hedonic.df$price) - hed_model$fitted.values
+log.res.std <- ( log.res - mean(log.res) ) / sd(log.res)
+hedonic.df['Std_Log_Residual'] <- log.res.std 
+
+## Write the Data Frame of House Price Predictions to a new ESRI Feature Class
+
+write.path <- file.path(file.path(wd, "data/sample_gdb.gdb/kc_predic"))
+
+arc.write(write.path, hedonic.df, overwrite = TRUE)
+```

@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?><messages><msg code="0" type="2">Start Time: Friday, January 13, 2023 6:37:57 AM</msg><msg code="0" type="0">[1] "Distance values for all house locations were extracted successfully"</msg><msg code="0" type="0">No periodicity (periodicity=) provided, defaulting to annual</msg><msg code="0" type="0">              Length Class      Mode   
+coefficients      4  -none-     numeric
+residuals     21571  -none-     numeric
+effects       21571  -none-     numeric
+rank              1  -none-     numeric
+fitted.values 21571  -none-     numeric
+assign            4  -none-     numeric
+qr                5  qr         list   
+df.residual       1  -none-     numeric
+xlevels           0  -none-     list   
+call              3  -none-     call   
+terms             3  terms      call   
+model             4  data.frame list   </msg><msg code="0" type="3">Succeeded at Friday, January 13, 2023 6:37:58 AM (Elapsed Time: 1.18 seconds)</msg></messages>
